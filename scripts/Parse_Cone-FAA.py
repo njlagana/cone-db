@@ -65,6 +65,16 @@ def parse_file(file_path):
     # parse actual data
     df = parse_data(raw_data)
 
+    # drop scans recorded after the end of the test. Atlas exports keep ~120 extra scans past
+    # "Test Length", where the O2 analyzer is off line (O2 < 0) and HRR becomes meaningless
+    test_length = metadata.get("test_end_time_s")
+    if test_length is not None:
+        n_before = len(df)
+        df = df[df["Time (s)"] <= test_length]
+        n_dropped = n_before - len(df)
+        if n_dropped:
+            print(f"\tDropped {n_dropped} scans after Test Length ({test_length} s)")
+
     # output data as a CSV file
     data_output_path = Path(OUTPUT_DIR) / f"{Path(file_path).stem}_data.csv"
     df.to_csv(data_output_path, index=False)
@@ -114,7 +124,10 @@ def parse_metadata(raw_metadata):
     # use regular expressions to extract the date & time
     # TODO: rewrite this using the extract_string helper function? (might be tricky b/c all three (date, time, operator) are in the same line)
     date = re.search(r"\d\d-\w{3}-\d\d", raw_metadata).group()
-    time = re.search(r"\d{1,2}:\d\d((p|a)\.?m\.?)?", raw_metadata).group()
+    # allow a space before "a.m."/"p.m." (e.g. "02:14 p.m."); without it the p.m. was dropped and times read as a.m.
+    time = re.search(r"\d{1,2}:\d\d(\s*[ap]\.?\s*m\.?)?", raw_metadata, flags=re.IGNORECASE).group()
+    # dateutil understands "02:14 pm" but not "02:14 p.m.", so drop the periods
+    time = time.replace(".", "")
 
     # rather than messing around with regex stuff again, just use the dateutil parser
     date = parser.parse(f"{date} {time}", dayfirst=True)
@@ -172,7 +185,8 @@ def parse_data(raw_data):
 
     # there are two header rows (one for units, one for the labels themselves)
     # combine those two rows into one so it's easier to work with
-    df.columns = [" ".join([h[0].strip(), f"({h[1].strip().replace("(", "").replace(")", "")})"]) for h in df.columns]
+    # (quotes inside the f-string switched to single quotes so this also runs on Python < 3.12)
+    df.columns = [" ".join([h[0].strip(), f"({h[1].strip().replace('(', '').replace(')', '')})"]) for h in df.columns]
     
     # account for first column being index ("Scan")
     # TODO: fix this to use Scan as the actual index
